@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Умная кормушка AJCloud",
+        "description": "Введите email и пароль от аккаунта в приложении AJCloud.",
+        "data": {
+          "username": "Email",
+          "password": "Пароль"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Неверный логин или пароль",
+      "cannot_connect": "Ошибка соединения с серверами AJCloud",
+      "unknown": "Неизвестная ошибка"
+    },
+    "abort": {
+      "already_configured": "Этот аккаунт AJCloud уже настроен"
+    }
+  },
+  "entity": {
+    "button": {
+      "feed": {
+        "name": "Выдать корм"
+      },
+      "reboot": {
+        "name": "Перезагрузка"
+      }
+    },
+    "number": {
+      "portions": {
+        "name": "Размер порции"
+      }
+    },
+    "switch": {
+      "rtsp_stream": {
+        "name": "Локальный RTSP видеопоток"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Камера"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Статус подключения"
+      },
+      "last_feed": {
+        "name": "Последнее кормление"
+      },
+      "portions_today": {
+        "name": "Выдано сегодня"
+      },
+      "wifi": {
+        "name": "Уровень сигнала Wi-Fi"
+      },
+      "firmware": {
+        "name": "Версия прошивки"
+      },
+      "ip": {
+        "name": "IP-адрес в сети"
+      }
+    }
+  }
+}

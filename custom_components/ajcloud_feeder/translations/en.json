@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AJCloud Smart Pet Feeder",
+        "description": "Enter your AJCloud mobile app account credentials (email and password).",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Failed to connect to AJCloud cloud servers",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This AJCloud account is already configured"
+    }
+  },
+  "entity": {
+    "button": {
+      "feed": {
+        "name": "Feed"
+      },
+      "reboot": {
+        "name": "Reboot"
+      }
+    },
+    "number": {
+      "portions": {
+        "name": "Portion size"
+      }
+    },
+    "switch": {
+      "rtsp_stream": {
+        "name": "Local RTSP stream"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Camera"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Connection status"
+      },
+      "last_feed": {
+        "name": "Last feeding"
+      },
+      "portions_today": {
+        "name": "Portions today"
+      },
+      "wifi": {
+        "name": "Wi-Fi signal"
+      },
+      "firmware": {
+        "name": "Firmware version"
+      },
+      "ip": {
+        "name": "Local IP"
+      }
+    }
+  }
+}

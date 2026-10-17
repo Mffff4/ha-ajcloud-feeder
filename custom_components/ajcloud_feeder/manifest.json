@@ -1,0 +1,15 @@
+{
+  "domain": "ajcloud_feeder",
+  "name": "AJCloud Smart Pet Feeder",
+  "codeowners": ["@Mffff4"],
+  "config_flow": true,
+  "documentation": "https://github.com/Mffff4/ha-ajcloud-feeder",
+  "issue_tracker": "https://github.com/Mffff4/ha-ajcloud-feeder/issues",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "requirements": [
+    "pynacl>=1.5.0",
+    "cryptography>=41.0.0"
+  ],
+  "version": "1.0.0"
+}

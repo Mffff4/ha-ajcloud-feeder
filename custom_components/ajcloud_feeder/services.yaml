@@ -1,0 +1,19 @@
+feed_portions:
+  name: Feed Portions
+  description: Dispenses pet food portions via the AJCloud smart pet feeder.
+  fields:
+    feeder_id:
+      name: Feeder Device ID
+      description: Specific Feeder Device ID (optional, defaults to all configured feeders).
+      example: "AJCDCTMKOEUR3YKS"
+      selector:
+        text:
+    portions:
+      name: Portions
+      description: Number of portions to dispense (1 to 10).
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
