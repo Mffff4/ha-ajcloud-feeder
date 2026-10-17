@@ -295,3 +295,24 @@ class AJCloudApiClient:
             if infos:
                 return infos[0].get("info", {})
             return {}
+
+    async def async_trigger_snapshot(self, device_id: str) -> bool:
+        """Trigger camera to capture and upload a fresh snapshot to cloud."""
+        if not self.access_token:
+            raise AJCloudAuthError("Not authenticated")
+
+        gw = self.gateways.get(device_id, "https://cam-gw-us.ajcloud.net/api")
+        url = f"{gw.rstrip('/')}/v1/snapshot"
+
+        body_obj = {
+            "meta": self._meta(device_id=device_id),
+            "data": {
+                "deviceId": device_id,
+            },
+        }
+        body_str = json.dumps(body_obj, separators=(",", ":"))
+        headers = self._build_signed_headers(url, body_str)
+
+        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
+            res = await resp.json()
+            return res.get("code") == 0

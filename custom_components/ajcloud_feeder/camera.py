@@ -41,7 +41,6 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
     _attr_has_entity_name = True
     _attr_translation_key = "camera"
     _attr_icon = "mdi:cctv"
-    _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(
         self,
@@ -56,20 +55,32 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
         self._client = client
         self._device_id = device_id
         self._device_raw = device_raw
+        self._last_image: bytes | None = None
         self._attr_unique_id = f"{device_id}_camera"
         self._attr_name = "Камера"
         self._attr_device_info = get_device_info(
             device_id, device_raw, coordinator.data.get(device_id)
         )
 
+    @property
+    def supported_features(self) -> CameraEntityFeature:
+        """Return supported features dynamically based on device capability."""
+        # By default AJCloud feeders stream over P2P/Relay in mobile apps,
+        # but if localRtsp is advertised or rtspConfig port 554 is enabled, allow STREAM.
+        data = self.coordinator.data.get(self._device_id, {})
+        cap = data.get("capability", {})
+        if str(cap.get("localRtsp")) in ("1", 1, True):
+            return CameraEntityFeature.STREAM
+        return CameraEntityFeature(0)
+
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await super().async_added_to_hass()
-        # Proactively ensure device RTSP server is active on startup
+        # Proactively request an initial live snapshot from the camera
         try:
-            await self._client.async_enable_rtsp(self._device_id, enable=True, port=554, verify=0)
+            await self._client.async_trigger_snapshot(self._device_id)
         except Exception as err:
-            _LOGGER.debug("Could not auto-enable RTSP on startup: %s", err)
+            _LOGGER.debug("Could not request initial snapshot: %s", err)
 
     @property
     def is_recording(self) -> bool:
@@ -90,16 +101,7 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
         """Return dynamic RTSP stream source for Home Assistant stream component."""
         data = self.coordinator.data.get(self._device_id, {})
 
-        # Auto-enable RTSP server on device if not yet active
-        rtsp_cfg = data.get("rtspConfig", {})
-        if str(rtsp_cfg.get("enable")) not in ("1", 1, True):
-            _LOGGER.debug("RTSP disabled or unverified on %s; enabling...", self._device_id)
-            try:
-                await self._client.async_enable_rtsp(self._device_id, enable=True, port=554, verify=0)
-            except Exception as err:
-                _LOGGER.warning("Could not auto-enable RTSP: %s", err)
-
-        # 1. Prefer exact live stream URL reported by device firmware
+        # 1. Prefer exact live stream URL reported by device firmware if valid
         streams = data.get("streamConfig", {}).get("streams", [])
         if streams:
             for s in streams:
@@ -121,9 +123,8 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
         port = data.get("rtspConfig", {}).get("port") or 554
 
         if ip:
-            return f"rtsp://{ip}:{port}/live/ch0"
+            return f"rtsp://{ip}:{port}/ch01"
 
-        _LOGGER.warning("Could not determine local IP for feeder %s RTSP stream", self._device_id)
         return None
 
     async def async_camera_image(
@@ -136,9 +137,12 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
             try:
                 async with self._client._session.get(snapshot_url, timeout=10) as resp:
                     if resp.status == 200:
-                        return await resp.read()
+                        self._last_image = await resp.read()
+                        return self._last_image
             except Exception as err:
                 _LOGGER.debug("Could not fetch camera snapshot: %s", err)
 
-        # Fallback to generating frame from RTSP stream via Home Assistant's stream/ffmpeg
-        return await super().async_camera_image(width, height)
+        if self._last_image:
+            return self._last_image
+
+        return None

@@ -32,6 +32,7 @@ async def async_setup_entry(
     entities: list[ButtonEntity] = []
     for device_id, dev_info in client.devices.items():
         entities.append(AJCloudFeedButton(coordinator, client, entry.entry_id, device_id, dev_info))
+        entities.append(AJCloudSnapshotButton(coordinator, client, device_id, dev_info))
         entities.append(AJCloudRebootButton(coordinator, client, device_id, dev_info))
     async_add_entities(entities)
 
@@ -71,8 +72,42 @@ class AJCloudFeedButton(CoordinatorEntity[AJCloudDataCoordinator], ButtonEntity)
         self.coordinator.record_feed(self._device_id, portions)
 
 
+class AJCloudSnapshotButton(CoordinatorEntity[AJCloudDataCoordinator], ButtonEntity):
+    """Button to request a fresh camera snapshot."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "snapshot"
+    _attr_icon = "mdi:camera-iris"
+
+    def __init__(
+        self,
+        coordinator: AJCloudDataCoordinator,
+        client: AJCloudApiClient,
+        device_id: str,
+        device_raw: dict[str, Any],
+    ) -> None:
+        """Initialize snapshot button."""
+        super().__init__(coordinator)
+        self._client = client
+        self._device_id = device_id
+        self._attr_unique_id = f"{device_id}_snapshot_button"
+        self._attr_name = "Обновить снимок камеры"
+        self._attr_device_info = get_device_info(
+            device_id, device_raw, coordinator.data.get(device_id)
+        )
+
+    async def async_press(self) -> None:
+        """Trigger fresh snapshot from camera."""
+        _LOGGER.info("Requesting fresh snapshot for %s", self._device_id)
+        await self._client.async_trigger_snapshot(self._device_id)
+        # Give camera 2 seconds to upload image to CDN, then refresh coordinator
+        import asyncio
+        await asyncio.sleep(2)
+        await self.coordinator.async_request_refresh()
+
+
 class AJCloudRebootButton(CoordinatorEntity[AJCloudDataCoordinator], ButtonEntity):
-    """Diagnostic button to reboot device."""
+    """Button to restart device."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "reboot"
@@ -100,8 +135,10 @@ class AJCloudRebootButton(CoordinatorEntity[AJCloudDataCoordinator], ButtonEntit
     async def async_press(self) -> None:
         """Send reboot signal."""
         gw = self._client.gateways.get(self._device_id, "https://cam-gw-us.ajcloud.net/api")
-        url = f"{gw.rstrip('/')}/v1/reboot"
-        body_str = "{}"
+        url = f"{gw.rstrip('/')}/v1/restart"
+        import json
+        body_obj = {"meta": self._client._meta(device_id=self._device_id), "data": {"deviceId": self._device_id}}
+        body_str = json.dumps(body_obj, separators=(",", ":"))
         headers = self._client._build_signed_headers(url, body_str)
         try:
             async with self._client._session.post(url, data=body_str, headers=headers, timeout=10) as resp:

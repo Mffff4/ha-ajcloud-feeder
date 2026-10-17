@@ -26,6 +26,9 @@
       },
       "reboot": {
         "name": "Reboot"
+      },
+      "snapshot": {
+        "name": "Take Snapshot"
       }
     },
     "number": {
