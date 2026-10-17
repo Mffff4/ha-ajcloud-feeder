@@ -167,4 +167,7 @@ class AJCloudIpSensor(AJCloudBaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        return "192.168.2.84"
+        data = self.coordinator.data.get(self._device_id, {})
+        net = data.get("networkConfig", {})
+        return net.get("localIp") or data.get("localIp")
+

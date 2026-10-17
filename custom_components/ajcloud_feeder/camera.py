@@ -77,20 +77,25 @@ class AJCloudCamera(CoordinatorEntity[AJCloudDataCoordinator], Camera):
         return True
 
     async def stream_source(self) -> str | None:
-        """Return RTSP stream source for Home Assistant stream component."""
+        """Return dynamic RTSP stream source for Home Assistant stream component."""
         data = self.coordinator.data.get(self._device_id, {})
-        ip = "192.168.2.84"
-        port = data.get("rtspConfig", {}).get("port") or 554
 
-        # Check streamConfig from device telemetry
+        # 1. Prefer exact live stream URL reported by device firmware
         streams = data.get("streamConfig", {}).get("streams", [])
         if streams:
-            first_stream = streams[0].get("localUrl")
-            if first_stream:
-                return first_stream
+            for s in streams:
+                url = s.get("localUrl")
+                if url:
+                    return url
 
-        # Default high-res RTSP channel 0 for AJCloud
-        return f"rtsp://{ip}:{port}/live/ch0"
+        # 2. Dynamic fallback using IP reported by device networkConfig
+        net = data.get("networkConfig", {})
+        ip = net.get("localIp") or data.get("localIp")
+        port = data.get("rtspConfig", {}).get("port") or 554
+
+        if ip:
+            return f"rtsp://{ip}:{port}/ch01"
+        return None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
