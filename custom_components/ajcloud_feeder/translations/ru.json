@@ -39,6 +39,9 @@
     "switch": {
       "rtsp_stream": {
         "name": "Локальный RTSP видеопоток"
+      },
+      "feed_switch": {
+        "name": "Кормушка"
       }
     },
     "camera": {

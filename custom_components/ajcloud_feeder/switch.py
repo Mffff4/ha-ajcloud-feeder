@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .__init__ import AJCloudDataCoordinator
 from .api import AJCloudApiClient
-from .const import DOMAIN
+from .const import DEFAULT_PORTIONS, DOMAIN
 from .device import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +33,8 @@ async def async_setup_entry(
         AJCloudRtspSwitch(coordinator, client, device_id, dev_info)
         for device_id, dev_info in client.devices.items()
     ]
+    for device_id, dev_info in client.devices.items():
+        entities.append(AJCloudFeedSwitch(coordinator, client, entry.entry_id, device_id, dev_info))
     async_add_entities(entities)
 
 
@@ -79,3 +81,68 @@ class AJCloudRtspSwitch(CoordinatorEntity[AJCloudDataCoordinator], SwitchEntity)
         _LOGGER.info("Disabling RTSP stream on %s", self._device_id)
         await self._client.async_enable_rtsp(self._device_id, enable=False, port=554, verify=0)
         await self.coordinator.async_request_refresh()
+
+
+class AJCloudFeedSwitch(CoordinatorEntity[AJCloudDataCoordinator], SwitchEntity):
+    """Switch to trigger feeding, compatible with voice assistants and Yaha Cloud."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "feed_switch"
+    _attr_icon = "mdi:food-drumstick"
+
+    def __init__(
+        self,
+        coordinator: AJCloudDataCoordinator,
+        client: AJCloudApiClient,
+        entry_id: str,
+        device_id: str,
+        device_raw: dict[str, Any],
+    ) -> None:
+        """Initialize feed switch."""
+        super().__init__(coordinator)
+        self._client = client
+        self._entry_id = entry_id
+        self._device_id = device_id
+        self._attr_unique_id = f"{device_id}_feed_switch"
+        self._attr_name = "Кормушка"
+        self._is_feeding = False
+        self._attr_device_info = get_device_info(
+            device_id, device_raw, coordinator.data.get(device_id)
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return true while feeding command is active."""
+        return self._is_feeding
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return state attributes for Yaha Cloud / Yandex Alice."""
+        last_feed = self.coordinator.last_feed_time.get(self._device_id)
+        portions_today = self.coordinator.portions_today.get(self._device_id, 0)
+        portions_set = self.hass.data[DOMAIN][self._entry_id]["portions"].get(self._device_id, DEFAULT_PORTIONS)
+        return {
+            "portions": portions_set,
+            "portions_today": portions_today,
+            "last_feed_time": last_feed.isoformat() if last_feed else None,
+            "food_level": "normal",
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Feed when turned on (voice command 'Алиса, включи кормушку' or Yaha Cloud)."""
+        portions = self.hass.data[DOMAIN][self._entry_id]["portions"].get(self._device_id, DEFAULT_PORTIONS)
+        self._is_feeding = True
+        self.async_write_ha_state()
+        try:
+            await self._client.async_feed(self._device_id, portions=portions)
+            self.coordinator.record_feed(self._device_id, portions)
+        finally:
+            import asyncio
+            await asyncio.sleep(1)
+            self._is_feeding = False
+            self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """No-op for turn off."""
+        self._is_feeding = False
+        self.async_write_ha_state()

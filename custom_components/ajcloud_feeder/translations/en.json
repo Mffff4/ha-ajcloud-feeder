@@ -38,7 +38,10 @@
     },
     "switch": {
       "rtsp_stream": {
-        "name": "Local RTSP stream"
+        "name": "Local RTSP Stream"
+      },
+      "feed_switch": {
+        "name": "Feeder"
       }
     },
     "camera": {
