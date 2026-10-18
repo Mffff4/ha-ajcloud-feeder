@@ -49,7 +49,7 @@ class AJCloudDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_day: int = dt_util.now().day
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch latest status for all devices."""
+        """Fetch latest status for all devices with resilient fallback."""
         # Reset portions count at midnight
         now = dt_util.now()
         if now.day != self._last_day:
@@ -60,9 +60,18 @@ class AJCloudDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             for device_id in self.client.devices:
                 status = await self.client.async_get_device_status(device_id)
-                data[device_id] = status
+                if status:
+                    data[device_id] = status
+                elif self.data and device_id in self.data:
+                    # Keep previous telemetry if single poll was empty (prevents entity flickering)
+                    data[device_id] = self.data[device_id]
+                else:
+                    data[device_id] = {}
             return data
         except (AJCloudApiError, AJCloudAuthError) as err:
+            _LOGGER.warning("Update failed: %s, retaining last known state", err)
+            if self.data:
+                return self.data
             raise UpdateFailed(f"Error fetching data: {err}") from err
 
     def record_feed(self, device_id: str, portions: int) -> None:

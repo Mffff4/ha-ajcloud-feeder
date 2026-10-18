@@ -37,6 +37,8 @@ class AJCloudApiClient:
     def __init__(self, session: aiohttp.ClientSession) -> None:
         """Initialize the client."""
         self._session = session
+        self._username: str | None = None
+        self._password: str | None = None
         self.uac_url: str = ""
         self.access_token: str | None = None
         self.refresh_token: str | None = None
@@ -114,6 +116,8 @@ class AJCloudApiClient:
 
     async def async_login(self, username: str, password: str) -> bool:
         """Perform two-phase outer-challenge + signin."""
+        self._username = username
+        self._password = password
         if not self.uac_url:
             await self.async_resolve_node(username)
 
@@ -178,49 +182,77 @@ class AJCloudApiClient:
         _LOGGER.info("Successfully authenticated with AJCloud (UID: %s)", self.uid)
         return True
 
-    async def async_fetch_devices(self) -> list[dict[str, Any]]:
-        """Fetch bound devices and their gateway URLs."""
+    async def async_ensure_auth(self) -> None:
+        """Ensure token is valid, silently re-authenticating if expired."""
         if not self.access_token:
-            raise AJCloudAuthError("Not authenticated")
+            if self._username and self._password:
+                _LOGGER.info("Session expired or missing, re-authenticating with AJCloud...")
+                await self.async_login(self._username, self._password)
+            else:
+                raise AJCloudAuthError("Not authenticated and credentials not cached")
 
-        list_url = f"{self.uac_url}/v3/device-list"
+    async def _post_signed(self, url: str, data_payload: dict[str, Any], device_id: str | None = None) -> dict[str, Any]:
+        """Perform signed POST request with automatic re-login on 401/expired token."""
+        await self.async_ensure_auth()
+        
         body_obj = {
-            "meta": self._meta(),
-            "data": {},
+            "meta": self._meta(device_id=device_id),
+            "data": data_payload,
         }
         body_str = json.dumps(body_obj, separators=(",", ":"))
-        headers = self._build_signed_headers(list_url, body_str)
+        headers = self._build_signed_headers(url, body_str)
 
-        async with self._session.post(list_url, data=body_str, headers=headers, timeout=15) as resp:
-            res = await resp.json()
-            if res.get("code") != 0:
-                raise AJCloudApiError(f"Device list failed: {res.get('message')}")
-            result_data = res.get("result", {})
-            devices_raw = result_data.get("conDevices", [])
-            dev_generals = result_data.get("devGenerals", [])
+        try:
+            async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
+                res = await resp.json()
+                code = res.get("code")
+                # Error codes: 1000/1001/1002/1003 token invalid or expired
+                if code in (1000, 1001, 1002, 1003, 1004, 1005) or resp.status in (401, 403):
+                    _LOGGER.warning("AJCloud token expired (code %s), re-authenticating...", code)
+                    if self._username and self._password:
+                        await self.async_login(self._username, self._password)
+                        # Re-sign and retry once
+                        body_obj["meta"] = self._meta(device_id=device_id)
+                        body_str = json.dumps(body_obj, separators=(",", ":"))
+                        headers = self._build_signed_headers(url, body_str)
+                        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as retry_resp:
+                            return await retry_resp.json()
+                return res
+        except aiohttp.ClientError as err:
+            _LOGGER.debug("Network error during signed request to %s: %s", url, err)
+            raise AJCloudApiError(f"Network error: {err}") from err
 
-            # Extract individual appGatewayUrl from devGenerals context
-            for gen in dev_generals:
-                did = gen.get("deviceId")
-                ctx_str = gen.get("context", "")
-                if did and ctx_str:
-                    try:
-                        ctx = json.loads(ctx_str)
-                        cfg = ctx.get("config", {})
-                        gw = cfg.get("appGatewayUrl")
-                        if gw:
-                            self.gateways[did] = gw
-                    except Exception:
-                        pass
+    async def async_fetch_devices(self) -> list[dict[str, Any]]:
+        """Fetch bound devices and their gateway URLs."""
+        await self.async_ensure_auth()
+
+        list_url = f"{self.uac_url}/v3/device-list"
+        res = await self._post_signed(list_url, {})
+        if res.get("code") != 0:
+            raise AJCloudApiError(f"Device list failed: {res.get('message')}")
+        result_data = res.get("result", {})
+        devices_raw = result_data.get("conDevices", [])
+        dev_generals = result_data.get("devGenerals", [])
+
+        # Extract individual appGatewayUrl from devGenerals context
+        for gen in dev_generals:
+            did = gen.get("deviceId")
+            ctx_str = gen.get("context", "")
+            if did and ctx_str:
+                try:
+                    ctx = json.loads(ctx_str)
+                    cfg = ctx.get("config", {})
+                    gw = cfg.get("appGatewayUrl")
+                    if gw:
+                        self.gateways[did] = gw
+                except Exception:
+                    pass
 
         self.devices = {d["deviceId"]: d for d in devices_raw if "deviceId" in d}
         return list(self.devices.values())
 
     async def async_feed(self, device_id: str, portions: int = 1, outlet: int = 0) -> bool:
         """Send feed command to device."""
-        if not self.access_token:
-            raise AJCloudAuthError("Not authenticated")
-
         gw = self.gateways.get(device_id, "https://cam-gw-us.ajcloud.net/api")
         url = f"{gw.rstrip('/')}/v1/feed-manual-ctrl"
 
@@ -232,87 +264,53 @@ class AJCloudApiClient:
             data_payload["outlets"] = [outlet]
             data_payload["feedQuantities"] = [portions]
 
-        body_obj = {
-            "meta": self._meta(device_id=device_id),
-            "data": data_payload,
-        }
-        body_str = json.dumps(body_obj, separators=(",", ":"))
-        headers = self._build_signed_headers(url, body_str)
-
-        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
-            res = await resp.json()
-            if res.get("code") != 0:
-                raise AJCloudApiError(f"Feed command failed: {res.get('message', res)}")
-            _LOGGER.info("Feed command succeeded for %s: %s portion(s)", device_id, portions)
-            return True
+        res = await self._post_signed(url, data_payload, device_id=device_id)
+        if res.get("code") != 0:
+            raise AJCloudApiError(f"Feed command failed: {res.get('message', res)}")
+        _LOGGER.info("Feed command succeeded for %s: %s portion(s)", device_id, portions)
+        return True
 
     async def async_enable_rtsp(self, device_id: str, enable: bool = True, port: int = 554, verify: int = 0) -> bool:
         """Enable or disable local RTSP stream on the device."""
-        if not self.access_token:
-            raise AJCloudAuthError("Not authenticated")
-
         gw = self.gateways.get(device_id, "https://cam-gw-us.ajcloud.net/api")
         url = f"{gw.rstrip('/')}/v1/rtsp-config"
-
-        body_obj = {
-            "meta": self._meta(device_id=device_id),
-            "data": {
-                "deviceId": device_id,
-                "enable": "1" if enable else "0",
-                "port": str(port),
-                "verify": str(verify),
-            },
+        data_payload = {
+            "deviceId": device_id,
+            "enable": "1" if enable else "0",
+            "port": str(port),
+            "verify": str(verify),
         }
-        body_str = json.dumps(body_obj, separators=(",", ":"))
-        headers = self._build_signed_headers(url, body_str)
-
-        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
-            res = await resp.json()
-            return res.get("code") == 0
+        res = await self._post_signed(url, data_payload, device_id=device_id)
+        return res.get("code") == 0
 
     async def async_get_device_status(self, device_id: str) -> dict[str, Any]:
         """Fetch real-time device telemetry and status."""
-        if not self.access_token:
-            raise AJCloudAuthError("Not authenticated")
-
         gw = self.gateways.get(device_id, "https://cam-gw-us.ajcloud.net/api")
         url = f"{gw.rstrip('/')}/v1/fetch-infos"
-
-        body_obj = {
-            "meta": self._meta(device_id=device_id),
-            "data": {
-                "devices": [{"deviceId": device_id, "deviceType": 1}],
-            },
+        data_payload = {
+            "devices": [{"deviceId": device_id, "deviceType": 1}],
         }
-        body_str = json.dumps(body_obj, separators=(",", ":"))
-        headers = self._build_signed_headers(url, body_str)
-
-        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
-            res = await resp.json()
+        try:
+            res = await self._post_signed(url, data_payload, device_id=device_id)
             if res.get("code") != 0:
                 return {}
             infos = res.get("result", {}).get("infos", [])
             if infos:
                 return infos[0].get("info", {})
-            return {}
+        except Exception as err:
+            _LOGGER.debug("Could not fetch status for %s: %s", device_id, err)
+        return {}
 
     async def async_trigger_snapshot(self, device_id: str) -> bool:
         """Trigger camera to capture and upload a fresh snapshot to cloud."""
-        if not self.access_token:
-            raise AJCloudAuthError("Not authenticated")
-
         gw = self.gateways.get(device_id, "https://cam-gw-us.ajcloud.net/api")
         url = f"{gw.rstrip('/')}/v1/snapshot"
-
-        body_obj = {
-            "meta": self._meta(device_id=device_id),
-            "data": {
-                "deviceId": device_id,
-            },
+        data_payload = {
+            "deviceId": device_id,
         }
-        body_str = json.dumps(body_obj, separators=(",", ":"))
-        headers = self._build_signed_headers(url, body_str)
-
-        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
-            res = await resp.json()
+        try:
+            res = await self._post_signed(url, data_payload, device_id=device_id)
             return res.get("code") == 0
+        except Exception as err:
+            _LOGGER.debug("Snapshot trigger error: %s", err)
+            return False
