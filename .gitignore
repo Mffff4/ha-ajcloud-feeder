@@ -36,3 +36,7 @@ home-assistant.log
 Thumbs.db
 .idea/
 .vscode/
+
+__pycache__/
+*.pyc
+*.pyo

@@ -41,6 +41,8 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 SERVICE_FEED_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_FEEDER_ID): cv.string,
