@@ -1,8 +1,10 @@
 """Config flow for AJCloud Smart Pet Feeder."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 from typing import Any
+import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -58,18 +60,63 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
             except AJCloudAuthError:
                 errors["base"] = "invalid_auth"
-            except AJCloudApiError:
+            except (AJCloudApiError, aiohttp.ClientError):
                 errors["base"] = "cannot_connect"
             except Exception:
-                _LOGGER.exception("Unexpected exception in config flow")
+                _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
-                await self.async_set_unique_id(info.get("uid") or user_input[CONF_USERNAME])
+                unique_id = (info.get("uid") or user_input[CONF_USERNAME]).lower()
+                await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
+
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
-            step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> FlowResult:
+        """Handle initiation of re-authentication with AJCloud."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle re-authentication with AJCloud."""
+        errors: dict[str, str] = {}
+        reauth_entry = (
+            self._get_reauth_entry()
+            if hasattr(self, "_get_reauth_entry")
+            else self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        )
+
+        if user_input is not None and reauth_entry:
+            username = reauth_entry.data[CONF_USERNAME]
+            password = user_input[CONF_PASSWORD]
+            try:
+                await validate_input(
+                    self.hass, {CONF_USERNAME: username, CONF_PASSWORD: password}
+                )
+            except AJCloudAuthError:
+                errors["base"] = "invalid_auth"
+            except (AJCloudApiError, aiohttp.ClientError):
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception during reauth")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    data_updates={CONF_PASSWORD: password},
+                )
+
+        username = reauth_entry.data[CONF_USERNAME] if reauth_entry else ""
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            description_placeholders={"username": username},
             errors=errors,
         )

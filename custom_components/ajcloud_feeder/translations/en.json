@@ -8,6 +8,13 @@
           "username": "Email",
           "password": "Password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with AJCloud",
+        "description": "Enter the new password for account {username}.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -16,7 +23,8 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "This AJCloud account is already configured"
+      "already_configured": "This AJCloud account is already configured",
+      "reauth_successful": "Re-authentication was successful"
     }
   },
   "entity": {

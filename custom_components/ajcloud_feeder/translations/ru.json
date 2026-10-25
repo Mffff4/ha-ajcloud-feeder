@@ -8,6 +8,13 @@
           "username": "Email",
           "password": "Пароль"
         }
+      },
+      "reauth_confirm": {
+        "title": "Повторная авторизация в AJCloud",
+        "description": "Введите новый пароль для аккаунта {username}.",
+        "data": {
+          "password": "Пароль"
+        }
       }
     },
     "error": {
@@ -16,7 +23,8 @@
       "unknown": "Неизвестная ошибка"
     },
     "abort": {
-      "already_configured": "Этот аккаунт AJCloud уже настроен"
+      "already_configured": "Этот аккаунт AJCloud уже настроен",
+      "reauth_successful": "Повторная авторизация успешно завершена"
     }
   },
   "entity": {

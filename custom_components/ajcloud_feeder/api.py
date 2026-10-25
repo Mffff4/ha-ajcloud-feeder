@@ -10,6 +10,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 import aiohttp
+from aiohttp import ClientTimeout
 
 try:
     from .const import DEFAULT_APP_NAME, DEFAULT_VENDOR_CODE, PORTAL_URL
@@ -39,6 +40,7 @@ class AJCloudApiClient:
         self._session = session
         self._username: str | None = None
         self._password: str | None = None
+        self._auth_failed: bool = False
         self.uac_url: str = ""
         self.access_token: str | None = None
         self.refresh_token: str | None = None
@@ -77,19 +79,18 @@ class AJCloudApiClient:
         if not self.access_token or not self.sign_token:
             return headers
 
-        path = urlparse(full_url).path
-        ts = str(int(time.time() * 1000) + 1000)
-        body_sha256 = hashlib.sha256(body_str.encode("utf-8")).hexdigest()
-        canonical = f"POST\n{path}\n{body_sha256}\n"
-        canonical_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        string_to_sign = f"HMAC-SHA256\n{ts}\n{canonical_sha256}"
+        parsed = urlparse(full_url)
+        path = parsed.path
+        timestamp = str(int(time.time()))
+
+        body_b64 = base64.b64encode(body_str.encode("utf-8")).decode("utf-8")
+        string_to_sign = f"POST\n{path}\n{timestamp}\n{body_b64}"
 
         h = hmac.new(self.sign_token.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256)
         sig_b64url = base64.urlsafe_b64encode(h.digest()).decode("utf-8").rstrip("=")
-        uac_sig = f"UAC1-HMAC-SHA256;{ts};{sig_b64url}"
 
+        headers["X-UAC-Signature"] = f"UAC1-HMAC-SHA256;{timestamp};{sig_b64url}"
         headers["Authorization"] = f"Bearer {self.access_token}"
-        headers["X-UAC-Signature"] = uac_sig
         return headers
 
     async def async_resolve_node(self, username: str) -> str:
@@ -104,7 +105,7 @@ class AJCloudApiClient:
                 "accountType": "email",
             },
         }
-        async with self._session.post(PORTAL_URL, json=payload, timeout=15) as resp:
+        async with self._session.post(PORTAL_URL, json=payload, timeout=ClientTimeout(total=15)) as resp:
             data = await resp.json()
             if data.get("code") != 0:
                 raise AJCloudApiError(f"Node query failed: {data.get('message')}")
@@ -135,55 +136,66 @@ class AJCloudApiClient:
                 "appVendorCode": DEFAULT_VENDOR_CODE,
             },
         }
-        async with self._session.post(challenge_url, json=challenge_payload, timeout=15) as resp:
-            res = await resp.json()
-            if res.get("code") != 0 or not res.get("result"):
-                raise AJCloudAuthError(f"Challenge failed: {res.get('message', 'Unknown error')}")
-            c_result = res["result"]
-            server_pub = c_result["serverPubKey"]
-            client_sec = c_result["clientSecretKey"]
+        try:
+            async with self._session.post(challenge_url, json=challenge_payload, timeout=ClientTimeout(total=15)) as resp:
+                res = await resp.json()
+                if res.get("code") != 0 or not res.get("result"):
+                    self._auth_failed = True
+                    raise AJCloudAuthError(f"Challenge failed: {res.get('message', 'Unknown error')}")
+                c_result = res["result"]
+                server_pub = c_result.get("serverPubKey", "")
+                salt = c_result.get("salt", "")
 
-        # 2. Encrypt password with NaCl Box
-        enc_pwd, nonce_b64 = encrypt_password_challenge(password, client_sec, server_pub)
+            # 2. Encrypt password with Curve25519 NaCl Box
+            enc_pwd, nonce_b64 = encrypt_password_challenge(password, server_pub, salt)
 
-        # 3. Sign in
-        signin_url = f"{self.uac_url}/v1/signin"
-        signin_payload = {
-            "meta": self._meta(),
-            "data": {
-                "origin": "mobile phone",
-                "osName": "android",
-                "agentName": "Samsung Galaxy",
-                "modelName": "Samsung Galaxy",
-                "agentToken": self.agent_token,
-                "appVendorCode": DEFAULT_VENDOR_CODE,
-                "grantType": "password",
-                "scope": "all",
-                "username": username,
-                "password": enc_pwd,
-                "nonce": nonce_b64,
-            },
-        }
-        async with self._session.post(signin_url, json=signin_payload, timeout=15) as resp:
-            s_res = await resp.json()
-            if s_res.get("code") != 0 or not s_res.get("result"):
-                raise AJCloudAuthError(f"Signin failed: {s_res.get('message', 'Invalid credentials')}")
-            s_data = s_res["result"]
-            self.access_token = s_data.get("accessToken")
-            self.refresh_token = s_data.get("refreshToken")
-            self.sign_token = s_data.get("signToken")
-            self.uid = s_data.get("uid")
-            ident = s_data.get("ident", {})
-            if ident.get("region"):
-                self.country_code = ident["region"]
-            if ident.get("continent"):
-                self.continent_code = ident["continent"]
+            # 3. Sign in
+            signin_url = f"{self.uac_url}/v1/signin"
+            signin_payload = {
+                "meta": self._meta(),
+                "data": {
+                    "origin": "mobile phone",
+                    "osName": "android",
+                    "agentName": "Samsung Galaxy",
+                    "modelName": "Samsung Galaxy",
+                    "agentToken": self.agent_token,
+                    "appVendorCode": DEFAULT_VENDOR_CODE,
+                    "grantType": "password",
+                    "scope": "all",
+                    "username": username,
+                    "password": enc_pwd,
+                    "nonce": nonce_b64,
+                },
+            }
+            async with self._session.post(signin_url, json=signin_payload, timeout=ClientTimeout(total=15)) as resp:
+                s_res = await resp.json()
+                if s_res.get("code") != 0 or not s_res.get("result"):
+                    self._auth_failed = True
+                    raise AJCloudAuthError(f"Signin failed: {s_res.get('message', 'Invalid credentials')}")
+                s_data = s_res["result"]
+                self.access_token = s_data.get("accessToken")
+                self.refresh_token = s_data.get("refreshToken")
+                self.sign_token = s_data.get("signToken")
+                self.uid = s_data.get("uid")
+                ident = s_data.get("ident", {})
+                if ident.get("region"):
+                    self.country_code = ident["region"]
+                if ident.get("continent"):
+                    self.continent_code = ident["continent"]
+        except AJCloudAuthError:
+            self._auth_failed = True
+            raise
+        except (aiohttp.ClientError, Exception) as err:
+            raise AJCloudApiError(f"Cannot connect to AJCloud: {err}") from err
 
+        self._auth_failed = False
         _LOGGER.info("Successfully authenticated with AJCloud (UID: %s)", self.uid)
         return True
 
     async def async_ensure_auth(self) -> None:
-        """Ensure token is valid, silently re-authenticating if expired."""
+        """Ensure token is valid, silently re-authenticating if expired without looping."""
+        if self._auth_failed:
+            raise AJCloudAuthError("Authentication previously failed, manual reauth required")
         if not self.access_token:
             if self._username and self._password:
                 _LOGGER.info("Session expired or missing, re-authenticating with AJCloud...")
@@ -192,9 +204,9 @@ class AJCloudApiClient:
                 raise AJCloudAuthError("Not authenticated and credentials not cached")
 
     async def _post_signed(self, url: str, data_payload: dict[str, Any], device_id: str | None = None) -> dict[str, Any]:
-        """Perform signed POST request with automatic re-login on 401/expired token."""
+        """Perform signed POST request with single re-login on 401/expired token."""
         await self.async_ensure_auth()
-        
+
         body_obj = {
             "meta": self._meta(device_id=device_id),
             "data": data_payload,
@@ -203,20 +215,22 @@ class AJCloudApiClient:
         headers = self._build_signed_headers(url, body_str)
 
         try:
-            async with self._session.post(url, data=body_str, headers=headers, timeout=15) as resp:
+            async with self._session.post(url, data=body_str, headers=headers, timeout=ClientTimeout(total=15)) as resp:
                 res = await resp.json()
                 code = res.get("code")
                 # Error codes: 1000/1001/1002/1003 token invalid or expired
                 if code in (1000, 1001, 1002, 1003, 1004, 1005) or resp.status in (401, 403):
-                    _LOGGER.warning("AJCloud token expired (code %s), re-authenticating...", code)
-                    if self._username and self._password:
+                    _LOGGER.warning("AJCloud token expired (code %s, HTTP %s), attempting single re-login...", code, resp.status)
+                    self.access_token = None
+                    if self._username and self._password and not self._auth_failed:
                         await self.async_login(self._username, self._password)
                         # Re-sign and retry once
                         body_obj["meta"] = self._meta(device_id=device_id)
                         body_str = json.dumps(body_obj, separators=(",", ":"))
                         headers = self._build_signed_headers(url, body_str)
-                        async with self._session.post(url, data=body_str, headers=headers, timeout=15) as retry_resp:
+                        async with self._session.post(url, data=body_str, headers=headers, timeout=ClientTimeout(total=15)) as retry_resp:
                             return await retry_resp.json()
+                    raise AJCloudAuthError(f"Session expired or invalid (code {code})")
                 return res
         except aiohttp.ClientError as err:
             _LOGGER.debug("Network error during signed request to %s: %s", url, err)

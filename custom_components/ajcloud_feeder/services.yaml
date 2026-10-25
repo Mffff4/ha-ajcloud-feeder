@@ -4,7 +4,8 @@ feed_portions:
   fields:
     feeder_id:
       name: Feeder Device ID
-      description: Specific Feeder Device ID (optional, defaults to all configured feeders).
+      description: Specific Feeder Device ID.
+      required: true
       example: "AJCDCTMKOEUR3YKS"
       selector:
         text:

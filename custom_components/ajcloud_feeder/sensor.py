@@ -133,8 +133,12 @@ class AJCloudWifiSensor(AJCloudBaseSensor):
     @property
     def native_value(self) -> int | None:
         data = self.coordinator.data.get(self._device_id, {})
-        sig = data.get("wifiSignal") or data.get("base", {}).get("wifiSignal")
-        return int(sig) if sig is not None else 85
+        sig = (
+            data.get("wifiSignal")
+            or data.get("base", {}).get("wifiSignal")
+            or data.get("networkConfig", {}).get("wifiSignal")
+        )
+        return int(sig) if sig is not None else None
 
 
 class AJCloudFirmwareSensor(AJCloudBaseSensor):
@@ -151,7 +155,7 @@ class AJCloudFirmwareSensor(AJCloudBaseSensor):
     @property
     def native_value(self) -> str | None:
         data = self.coordinator.data.get(self._device_id, {})
-        return data.get("fwVersion") or data.get("base", {}).get("fwVersion") or "14.00007.01.28"
+        return data.get("fwVersion") or data.get("base", {}).get("fwVersion") or None
 
 
 class AJCloudIpSensor(AJCloudBaseSensor):
