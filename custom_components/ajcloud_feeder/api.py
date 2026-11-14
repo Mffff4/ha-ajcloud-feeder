@@ -79,12 +79,17 @@ class AJCloudApiClient:
         if not self.access_token or not self.sign_token:
             return headers
 
-        parsed = urlparse(full_url)
-        path = parsed.path
-        timestamp = str(int(time.time()))
+        path = urlparse(full_url).path
+        # App signs a timestamp 1s ahead of now, in milliseconds.
+        timestamp = str(int(time.time() * 1000) + 1000)
 
-        body_b64 = base64.b64encode(body_str.encode("utf-8")).decode("utf-8")
-        string_to_sign = f"POST\n{path}\n{timestamp}\n{body_b64}"
+        def sha256_hex(text: str) -> str:
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        string_to_sign = (
+            f"HMAC-SHA256\n{timestamp}\n"
+            + sha256_hex(f"POST\n{path}\n{sha256_hex(body_str)}\n")
+        )
 
         h = hmac.new(self.sign_token.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256)
         sig_b64url = base64.urlsafe_b64encode(h.digest()).decode("utf-8").rstrip("=")
@@ -144,10 +149,11 @@ class AJCloudApiClient:
                     raise AJCloudAuthError(f"Challenge failed: {res.get('message', 'Unknown error')}")
                 c_result = res["result"]
                 server_pub = c_result.get("serverPubKey", "")
-                salt = c_result.get("salt", "")
+                client_pub = c_result.get("clientPubKey", "")
+                client_sec = c_result.get("clientSecretKey", "")
 
-            # 2. Encrypt password with Curve25519 NaCl Box
-            enc_pwd, nonce_b64 = encrypt_password_challenge(password, server_pub, salt)
+            # 2. Encrypt password with Curve25519 NaCl Box (server supplies the client keypair)
+            enc_pwd, nonce_b64 = encrypt_password_challenge(password, client_sec, server_pub)
 
             # 3. Sign in
             signin_url = f"{self.uac_url}/v1/signin"
@@ -165,6 +171,7 @@ class AJCloudApiClient:
                     "username": username,
                     "password": enc_pwd,
                     "nonce": nonce_b64,
+                    "clientPubKey": client_pub,
                 },
             }
             async with self._session.post(signin_url, json=signin_payload, timeout=ClientTimeout(total=15)) as resp:

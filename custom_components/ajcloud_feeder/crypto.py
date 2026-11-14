@@ -34,12 +34,6 @@ def encrypt_password_challenge(
     # box.encrypt(msg, nonce) returns nonce + ciphertext (16 bytes MAC + encrypted msg)
     encrypted = box.encrypt(password.encode("utf-8"), nonce)[len(nonce):]
 
-    # Strip leading zero bytes (as done by nbg.s in the APK)
-    idx = 0
-    while idx < len(encrypted) and encrypted[idx] == 0:
-        idx += 1
-    stripped = bytes(encrypted[idx:])
-
-    enc_password = base64.b64encode(stripped).decode("utf-8")
+    enc_password = base64.b64encode(encrypted).decode("utf-8")
     nonce_b64 = base64.b64encode(nonce).decode("utf-8")
     return enc_password, nonce_b64
